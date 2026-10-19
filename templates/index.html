@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ball Bounce — 2 Player</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    :root { color-scheme: dark; --bg:#090d18; --panel:#121a2b; --line:#263550; --teal:#4de1cf; --orange:#ffb454; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(ellipse at top,#15243b 0%,var(--bg) 60%); color:#eef4ff; font-family:system-ui,-apple-system,Segoe UI,sans-serif; display:flex; justify-content:center; padding:24px 14px; }
+    main { width:min(960px,100%); }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; }
+    h1 { font-size:clamp(24px,5vw,38px); margin:0; letter-spacing:-1px; }
+    .subtitle { color:#9fb0ca; margin-top:5px; font-size:14px; }
+    .pill { border:1px solid var(--line); background:#111b2d; border-radius:999px; padding:8px 12px; color:#b9c9e3; font-size:12px; white-space:nowrap; }
+    .panel { background:rgba(18,26,43,.94); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 16px 45px #0003; }
+    .lobby { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    h2 { margin:0 0 8px; font-size:18px; }
+    p { color:#a9b8d0; font-size:14px; line-height:1.5; margin:0 0 14px; }
+    button,input { font:inherit; border-radius:10px; padding:11px 13px; }
+    button { border:0; background:var(--teal); color:#07131b; font-weight:800; cursor:pointer; }
+    button.secondary { background:#24334d; color:#eef4ff; border:1px solid #354968; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    input { width:100%; border:1px solid #354968; background:#0b1322; color:white; outline:none; margin-bottom:9px; text-transform:uppercase; }
+    .row { display:flex; gap:8px; }
+    .row button { flex:0 0 auto; }
+    .error { color:#ff9292; min-height:20px; font-size:13px; margin-top:10px; }
+    .game-area { display:none; }
+    .scorebar { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:center; margin-bottom:12px; }
+    .player { padding:12px; background:#0d1524; border:1px solid var(--line); border-radius:12px; }
+    .player:last-child { text-align:right; }
+    .player strong { display:block; font-size:14px; }
+    .player span { color:#a9b8d0; font-size:13px; }
+    .p1 { color:var(--teal); } .p2 { color:var(--orange); }
+    #roomLabel { font-size:12px; color:#a9b8d0; text-align:center; }
+    .canvas-wrap { border:1px solid #31425e; border-radius:14px; overflow:hidden; background:#080e19; }
+    canvas { display:block; width:100%; height:auto; touch-action:none; }
+    .hint { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; color:#91a3bf; font-size:12px; margin-top:10px; }
+    .status { margin-top:14px; padding:12px; background:#0d1524; border:1px solid var(--line); border-radius:12px; color:#c8d5e9; text-align:center; }
+    .actions { display:flex; justify-content:center; gap:10px; margin-top:12px; }
+    @media(max-width:620px) { body{padding:16px 10px}.lobby{grid-template-columns:1fr}.panel{padding:13px}.pill{display:none}.scorebar{gap:6px}.player{padding:9px}.player strong{font-size:12px} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Ball <span style="color:var(--teal)">Bounce</span></h1>
+    </div>
+    <div class="pill">MADE WITH (FLASK + SOCKET.IO)</div>
+  </header>
+
+  <section id="lobby" class="panel">
+    <div class="lobby">
+      <div>
+        <h2>Create a room</h2>
+        <p>Room banao aur code apne friend ko bhejo.</p>
+        <button id="createBtn">Create game</button>
+      </div>
+      <div>
+        <h2>Join a room</h2>
+        <p>Friend se mila 5-character code enter karo.</p>
+        <input id="roomInput" maxlength="5" placeholder="ROOM CODE" aria-label="Room code">
+        <button id="joinBtn" class="secondary">Join game</button>
+      </div>
+    </div>
+    <div id="error" class="error" role="status"></div>
+  </section>
+
+  <section id="gameArea" class="game-area">
+    <div class="scorebar">
+      <div class="player"><strong class="p1">PLAYER 1 · TOP</strong><span id="lives1">Lives: ♥ ♥ ♥</span></div>
+      <div id="roomLabel">ROOM -----</div>
+      <div class="player"><strong class="p2">PLAYER 2 · BOTTOM</strong><span id="lives2">Lives: ♥ ♥ ♥</span></div>
+    </div>
+    <div class="canvas-wrap"><canvas id="game" width="800" height="500"></canvas></div>
+    <div class="hint"><span id="youAre">You are Player —</span><span>Mouse / touch / drag to move your paddle</span></div>
+    <div id="status" class="status">Waiting for another player…</div>
+    <div class="actions"><button id="againBtn" class="secondary" style="display:none">Play again</button><button id="leaveBtn" class="secondary">Back to lobby</button></div>
+  </section>
+</main>
+
+<script>
+  const socket = io();
+  const lobby = document.getElementById('lobby');
+  const gameArea = document.getElementById('gameArea');
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const errorBox = document.getElementById('error');
+  const statusBox = document.getElementById('status');
+  const againBtn = document.getElementById('againBtn');
+
+  let room = null;
+  let myPlayer = null;
+  let state = null;
+  let lastSentX = null;
+
+  document.getElementById('createBtn').addEventListener('click', () => {
+    errorBox.textContent = '';
+    socket.emit('create_game');
+  });
+  document.getElementById('joinBtn').addEventListener('click', () => {
+    errorBox.textContent = '';
+    socket.emit('join_game', { room: document.getElementById('roomInput').value });
+  });
+  document.getElementById('roomInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('joinBtn').click();
+  });
+  document.getElementById('leaveBtn').addEventListener('click', () => location.reload());
+  againBtn.addEventListener('click', () => socket.emit('play_again', { room }));
+
+  socket.on('joined_game', data => {
+    room = data.room;
+    myPlayer = data.player;
+    lobby.style.display = 'none';
+    gameArea.style.display = 'block';
+    document.getElementById('roomLabel').textContent = 'ROOM ' + room;
+    document.getElementById('youAre').textContent = 'You are ' + (myPlayer === 'p1' ? 'Player 1 · TOP' : 'Player 2 · BOTTOM');
+    statusBox.textContent = myPlayer === 'p1' ? 'Room created. Share the code and wait for Player 2.' : 'Connected! Get ready…';
+    draw();
+  });
+  socket.on('join_error', data => errorBox.textContent = data.message);
+  socket.on('opponent_left', data => {
+    statusBox.textContent = data.message;
+    againBtn.style.display = 'none';
+  });
+  socket.on('game_state', data => {
+    if (room && data.room !== room) return;
+    state = data;
+    document.getElementById('lives1').textContent = 'Lives: ' + '♥ '.repeat(data.lives.p1).trim() + (data.lives.p1 === 0 ? 'OUT' : '');
+    document.getElementById('lives2').textContent = 'Lives: ' + '♥ '.repeat(data.lives.p2).trim() + (data.lives.p2 === 0 ? 'OUT' : '');
+    if (data.status === 'waiting') {
+      statusBox.textContent = data.players_count < 2 ? 'Waiting for another player to join…' : 'Waiting to start…';
+      againBtn.style.display = 'none';
+    } else if (data.status === 'playing') {
+      statusBox.textContent = data.last_miss ? (data.last_miss === 'p1' ? 'Player 1 missed! One life lost.' : 'Player 2 missed! One life lost.') : 'Game on! Don’t miss the ball.';
+      againBtn.style.display = 'none';
+    } else if (data.status === 'finished') {
+      statusBox.textContent = data.winner === myPlayer ? '🏆 You win! Your opponent is OUT.' : 'You are OUT — your opponent wins!';
+      againBtn.style.display = 'inline-block';
+    }
+    draw();
+  });
+
+  function sendPaddle(clientX) {
+    if (!room || !myPlayer || !state || state.status !== 'playing') return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (clientX - rect.left) * canvas.width / rect.width;
+    const clamped = Math.max(56, Math.min(canvas.width - 56, x));
+    if (lastSentX === null || Math.abs(clamped - lastSentX) > 2) {
+      socket.emit('move_paddle', { room, x: clamped });
+      lastSentX = clamped;
+    }
+  }
+  canvas.addEventListener('mousemove', e => sendPaddle(e.clientX));
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); sendPaddle(e.touches[0].clientX); }, {passive:false});
+  canvas.addEventListener('touchmove', e => { e.preventDefault(); sendPaddle(e.touches[0].clientX); }, {passive:false});
+  canvas.addEventListener('pointerdown', e => sendPaddle(e.clientX));
+
+  function draw() {
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#080e19'; ctx.fillRect(0, 0, W, H);
+
+    // Subtle center line and center circle.
+    ctx.setLineDash([8, 10]); ctx.strokeStyle = '#23334b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(W/2, H/2, 54, 0, Math.PI*2); ctx.strokeStyle = '#1b2b41'; ctx.stroke();
+
+    if (!state) {
+      ctx.fillStyle = '#9fb0ca'; ctx.font = '20px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('Create or join a room to begin', W/2, H/2);
+      return;
+    }
+    const p1 = state.paddles.p1, p2 = state.paddles.p2;
+    ctx.fillStyle = '#4de1cf'; roundedRect(p1-56, 32, 112, 12, 6);
+    ctx.fillStyle = '#ffb454'; roundedRect(p2-56, H-44, 112, 12, 6);
+
+    const b = state.ball;
+    ctx.shadowBlur = 18; ctx.shadowColor = '#f3f7ff'; ctx.fillStyle = '#f7fbff';
+    ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#60728e'; ctx.font = '12px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('TOP', 14, 24); ctx.fillText('BOTTOM', 14, H-14);
+    if (state.status === 'waiting') {
+      ctx.fillStyle = '#eef4ff'; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(state.players_count < 2 ? 'WAITING FOR PLAYER 2' : 'READY', W/2, H/2-75);
+    } else if (state.status === 'finished') {
+      ctx.fillStyle = '#eef4ff'; ctx.font = 'bold 30px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(state.winner === 'p1' ? 'PLAYER 1 WINS!' : 'PLAYER 2 WINS!', W/2, H/2);
+    }
+  }
+  function roundedRect(x,y,w,h,r) {
+    ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fill();
+  }
+  // Redraw at display refresh rate for crisp UI; ball coordinates come from server.
+  function renderLoop() { draw(); requestAnimationFrame(renderLoop); }
+  renderLoop();
+</script>
+</body>
+</html>
