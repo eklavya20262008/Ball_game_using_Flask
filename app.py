@@ -3,6 +3,10 @@ import string
 import threading
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, join_room as socket_join_room, emit
+import os
+
+
+
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "change-this-secret-for-deployment"
@@ -243,4 +247,9 @@ def game_loop(code):
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
+    )
